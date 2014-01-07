@@ -31,6 +31,7 @@ except ImportError:
     class ServerError(Exception):
         pass
 
+SERVER_ERROR = 'SMTP_SERVER_ERROR'
 logger = logging.getLogger('validate_email')
 
 # All we are really doing is comparing the input string to one
@@ -109,8 +110,14 @@ def connect_to(mx):
 
 
 def quit_all():
+    global SMTP_CONNECTIONS
     for mx, con in SMTP_CONNECTIONS.items():
-        con.quit()
+        try:
+            con.quit()
+        except smtplib.SMTPServerDisconnected:
+            pass
+
+    SMTP_CONNECTIONS = {}
 
 
 def validate_email(email, check_mx=False, verify=False, debug=False):
@@ -121,12 +128,6 @@ def validate_email(email, check_mx=False, verify=False, debug=False):
     depend on circular definitions in the spec may not pass, but in
     general this should correctly identify any email address likely
     to be in use as of 2011."""
-    if debug:
-        logger = logging.getLogger('validate_email')
-        logger.setLevel(logging.DEBUG)
-    else:
-        logger = None
-
     try:
         assert re.match(VALID_ADDRESS_REGEXP, email) is not None
         check_mx |= verify
@@ -147,25 +148,36 @@ def validate_email(email, check_mx=False, verify=False, debug=False):
                         if debug:
                             logger.debug(u'%s answer: %s - %s', mx[1], status, _)
                         continue
+
                     smtp.mail('')
                     status, _ = smtp.rcpt(email)
                     if status == 250:
                         return True
                     if debug:
                         logger.debug(u'%s answer: %s - %s', mx[1], status, _)
+
                 except smtplib.SMTPServerDisconnected:  # Server not permits verify user
                     if debug:
                         logger.debug(u'%s disconnected.', mx[1])
+
+                    return (SERVER_ERROR, smtplib.SMTPServerDisconnected.__name__)
+
                 except smtplib.SMTPConnectError:
                     if debug:
                         logger.debug(u'Unable to connect to %s.', mx[1])
-            return None
+
+                    return (SERVER_ERROR, smtplib.SMTPConnectError.__name__)
+
+                # this means that the connection went wrong
+                return (SERVER_ERROR, status)
+
     except AssertionError:
         return False
     except (ServerError, socket.error) as e:
         if debug:
             logger.debug('ServerError or socket.error exception raised (%s).', e)
-        return None
+        return (SERVER_ERROR, e.__class__.__name__)
+
     return True
 
 if __name__ == "__main__":
