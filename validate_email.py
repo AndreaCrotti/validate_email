@@ -31,6 +31,8 @@ except ImportError:
     class ServerError(Exception):
         pass
 
+logger = logging.getLogger('validate_email')
+
 # All we are really doing is comparing the input string to one
 # gigantic regular expression.  But building that regexp, and
 # ensuring its correctness, is made much easier by assembling it
@@ -86,6 +88,7 @@ ADDR_SPEC = LOCAL_PART + r'@' + DOMAIN               # see 3.4.1
 VALID_ADDRESS_REGEXP = '^' + ADDR_SPEC + '$'
 
 MX_DNS_CACHE = {}
+SMTP_CONNECTIONS = {}
 
 
 def get_mx_ip(hostname):
@@ -93,6 +96,21 @@ def get_mx_ip(hostname):
         MX_DNS_CACHE[hostname] = DNS.mxlookup(hostname)
 
     return MX_DNS_CACHE[hostname]
+
+
+def connect_to(mx):
+    # TODO: handle possible errors here
+    if mx not in SMTP_CONNECTIONS:
+        con = smtplib.SMTP()
+        con.connect(mx)
+        SMTP_CONNECTIONS[mx] = con
+
+    return SMTP_CONNECTIONS[mx]
+
+
+def quit_all():
+    for mx, con in SMTP_CONNECTIONS.items():
+        con.quit()
 
 
 def validate_email(email, check_mx=False, verify=False, debug=False):
@@ -121,28 +139,23 @@ def validate_email(email, check_mx=False, verify=False, debug=False):
             mx_hosts = get_mx_ip(hostname)
             for mx in mx_hosts:
                 try:
-                    smtp = smtplib.SMTP()
-                    smtp.connect(mx[1])
+                    smtp = connect_to(mx[1])
                     if not verify:
-                        smtp.quit()
                         return True
                     status, _ = smtp.helo()
                     if status != 250:
-                        smtp.quit()
                         if debug:
                             logger.debug(u'%s answer: %s - %s', mx[1], status, _)
                         continue
                     smtp.mail('')
                     status, _ = smtp.rcpt(email)
                     if status == 250:
-                        smtp.quit()
                         return True
                     if debug:
                         logger.debug(u'%s answer: %s - %s', mx[1], status, _)
-                    smtp.quit()
                 except smtplib.SMTPServerDisconnected:  # Server not permits verify user
                     if debug:
-                        logger.debug(u'%s disconected.', mx[1])
+                        logger.debug(u'%s disconnected.', mx[1])
                 except smtplib.SMTPConnectError:
                     if debug:
                         logger.debug(u'Unable to connect to %s.', mx[1])
